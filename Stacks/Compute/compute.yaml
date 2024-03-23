@@ -44,6 +44,71 @@ Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, '']]
 
 Resources:
+  
+  InternetALB: 
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties: 
+      Name: !Sub "${Prefix}-alb"
+      Tags: 
+        - Key: Name
+          Value: !Sub "${Prefix}-alb"
+      # 内部向けかインターネット向け
+      Scheme: "internet-facing"
+      # ロードバランサーの属性
+      LoadBalancerAttributes:
+        # 削除保護が有効化されているかどうかを示します
+        - Key: "deletion_protection.enabled"
+          Value: false
+          # アイドルタイムアウト値
+        - Key: "idle_timeout.timeout_seconds"
+          Value: 60
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      # 起動するサブネット
+      Subnets: 
+        - SubnetId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PublicSubnetA'}
+        - SubnetId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PublicSubnetB'}
+
+  ALBListener: 
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties: 
+      # デフォルトルールのアクション
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroup
+          # ルールアクションタイプ
+          # forwardは指定されたターゲットグループにリクエストを転送
+          Type: forward
+      LoadBalancerArn: !Ref InternetALB
+      Port: 80
+      Protocol: HTTP
+
+  TargetGroup: 
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties: 
+      VpcId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-VPC'}
+      Name: !Sub "${Prefix}-tg"
+      # ターゲットにトラフィックをルーティングするために使用するプロトコル
+      Protocol: HTTP
+      Port: 80
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: "/"
+      # ターゲットでヘルスチェックを実行するときにロードバランサーが使用するポート
+      HealthCheckPort: "traffic-port"
+      # 非正常なインスタンスが正常であると見なすまでに必要なヘルスチェックの連続成功回数
+      HealthyThresholdCount: 2
+      # ターゲットが異常であると見なされるまでに必要なヘルスチェックの連続失敗回数
+      UnhealthyThresholdCount: 2
+      # ヘルスチェックを失敗と見なす、ターゲットからレスポンスがない時間
+      HealthCheckTimeoutSeconds: 5
+      # 個々のターゲットのヘルスチェックの概算間隔 
+      HealthCheckIntervalSeconds: 10
+      # ターゲットからの正常なレスポンスを確認するために使用する HTTP コード
+      Matcher: 
+        HttpCode: 200
+      Tags: 
+        - Key: Name
+          Value: !Sub "${Prefix}-tg"
+
 
   ProxyLunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -83,7 +148,7 @@ Resources:
             sudo yum update -y 
             
             # Install SSM agent
-            #sudo yum install -y https://s3.${AWS::Region}.amazonaws.com/amazon-ssm-${AWS::Region}/latest/linux_amd64/amazon-ssm-agent.rpm
+            sudo yum install -y https://s3.${AWS::Region}.amazonaws.com/amazon-ssm-${AWS::Region}/latest/linux_amd64/amazon-ssm-agent.rpm
 
             # Install pip
             sudo yum -y install python3-pip
@@ -91,7 +156,9 @@ Resources:
             # Install AWS CLI and CFN Bootstrap
             sudo pip3 install awscli
             sudo pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz   
-            
+            sudo cp -a /usr/local/init/ubuntu/cfn-hup /etc/init.d/cfn-hup
+            sudo chmod u+x /etc/init.d/cfn-hup
+
             # Run cfn-init and cfn-signal
             /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
             /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
@@ -276,9 +343,9 @@ Resources:
                 files:
                 - '/etc/cfn/cfn-hup.conf'
                 - '/etc/cfn/hooks.d/cfn-auto-reloader.conf'
-              amazon-ssm-agent:
-                enabled: true
-                ensureRunning: true
+              #amazon-ssm-agent:
+              #  enabled: true
+              #  ensureRunning: true
 
   ProxyInstance1: 
     Type: AWS::EC2::Instance 
@@ -324,218 +391,6 @@ Resources:
         - Key: Name
           Value: !Sub ${Prefix}-ec2-instance-bastion
 
-
-#  ProxyInstance:
-#    Type: AWS::EC2::Instance
-#    Metadata:
-#      'AWS::CloudFormation::Init':
-#        configSets:
-#          default: [cloudwatch, !If [HasIAMUserSSHAccess, ssh-access, !Ref 'AWS::NoValue'], config]
-#        cloudwatch:
-#          packages:
-#            rpm:
-#              cloudwatch: 'https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.#rpm'
-#          files:
-#            '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json': # https://docs.aws.amazon.com/#AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html
-#              content: !Sub |
-#                {
-#                  "logs": {
-#                    "logs_collected": {
-#                      "files": {
-#                        "collect_list": [{
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.log",
-#                           "log_stream_name": "{instance_id}/var/log/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.#log",
-#                           "timestamp_format": "%Y-%m-%dT%H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/amazon/amazon-cloudwatch-agent/configuration-validation.log",
-#                           "log_stream_name": "{instance_id}/var/log/amazon/amazon-cloudwatch-agent/configuration-validation.#log",
-#                           "timestamp_format": "%Y/%m/%d %H:%M:%S"
-#                        }, {
-#                          "log_group_name": "${Logs}",
-#                          "file_path": "/var/log/amazon/ssm/amazon-ssm-agent.log",
-#                          "log_stream_name": "{instance_id}/var/log/amazon/ssm/amazon-ssm-agent.log",
-#                          "timestamp_format": "%Y-%m-%d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/amazon/ssm/errors.log",
-#                           "log_stream_name": "{instance_id}/var/log/amazon/ssm/errors.log",
-#                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/audit/audit.log",
-#                           "log_stream_name": "{instance_id}/var/log/audit/audit.log"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/boot.log",
-#                           "log_stream_name": "{instance_id}/var/log/boot.log"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/cfn-hup.log",
-#                           "log_stream_name": "{instance_id}/var/log/cfn-hup.log",
-#                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/cfn-init-cmd.log",
-#                           "log_stream_name": "{instance_id}/var/log/cfn-init-cmd.log",
-#                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/cfn-init.log",
-#                           "log_stream_name": "{instance_id}/var/log/cfn-init.log",
-#                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/cfn-wire.log",
-#                           "log_stream_name": "{instance_id}/var/log/cfn-wire.log",
-#                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/cloud-init-output.log",
-#                           "log_stream_name": "{instance_id}/var/log/cloud-init-output.log"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/cloud-init.log",
-#                           "log_stream_name": "{instance_id}/var/log/cloud-init.log",
-#                           "timestamp_format": "%b %d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/cron",
-#                           "log_stream_name": "{instance_id}/var/log/cron",
-#                           "timestamp_format": "%b %-d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/dmesg",
-#                           "log_stream_name": "{instance_id}/var/log/dmesg"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/grubby_prune_debug",
-#                           "log_stream_name": "{instance_id}/var/log/grubby_prune_debug"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/maillog",
-#                           "log_stream_name": "{instance_id}/var/log/maillog",
-#                           "timestamp_format": "%b %-d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/messages",
-#                           "log_stream_name": "{instance_id}/var/log/messages",
-#                           "timestamp_format": "%b %-d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/secure",
-#                           "log_stream_name": "{instance_id}/var/log/secure",
-#                           "timestamp_format": "%b %-d %H:%M:%S"
-#                        }, {
-#                           "log_group_name": "${Logs}",
-#                           "file_path": "/var/log/yum.log",
-#                           "log_stream_name": "{instance_id}/var/log/yum.log",
-#                           "timestamp_format": "%b %d %H:%M:%S"
-#                        }]
-#                      }
-#                    }
-#                  },
-#                  "metrics": {
-#                    "namespace": "${AWS::StackName}",
-#                    "append_dimensions": {
-#                      "InstanceId": "${!aws:InstanceId}"
-#                    },
-#                    "metrics_collected": {
-#                      "mem": {
-#                        "measurement": [
-#                          "mem_used_percent"
-#                        ]
-#                      },
-#                      "swap": {
-#                        "measurement": [
-#                          "swap_used_percent"
-#                        ]
-#                      },
-#                      "disk": {
-#                        "resources": [
-#                          "/"
-#                        ],
-#                        "measurement": [
-#                          "used_percent"
-#                        ],
-#                        "drop_device": true
-#                      }
-#                    }
-#                  }
-#                }
-#              mode: '000644'
-#              owner: root
-#              group: root
-#          services:
-#            sysvinit:
-#              'amazon-cloudwatch-agent':
-#                enabled: true
-#                ensureRunning: true
-#                files:
-#                - '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json'
-#                packages:
-#                - cloudwatch
-#        config:
-#          files:
-#            '/etc/cfn/cfn-hup.conf':
-#              content: !Sub |
-#                [main]
-#                stack=${AWS::StackId}
-#                region=${AWS::Region}
-#                interval=1
-#              mode: '000400'
-#              owner: root
-#              group: root
-#            '/etc/cfn/hooks.d/cfn-auto-reloader.conf':
-#              content: !Sub |
-#                [cfn-auto-reloader-hook]
-#                triggers=post.update
-#                path=Resources.VirtualMachine.Metadata.AWS::CloudFormation::Init
-#                action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} #--resource=VirtualMachine
-#                runas=root
-#          services:
-#            sysvinit:
-#              cfn-hup:
-#                enabled: true
-#                ensureRunning: true
-#                files:
-#                - '/etc/cfn/cfn-hup.conf'
-#                - '/etc/cfn/hooks.d/cfn-auto-reloader.conf'
-#              amazon-ssm-agent:
-#                enabled: true
-#                ensureRunning: true
-#    Properties:
-#      IamInstanceProfile: !Ref InstanceProfile
-#      ImageId: 'ami-0300c29883fc847bf' # RHEL-8.6.0_HVM-20231009-x86_64-59-Hourly2-GP2
-#      InstanceType: t2.small
-#      KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
-#      BlockDeviceMappings:
-#      - DeviceName: '/dev/xvda'
-#        Ebs:
-#          Encrypted: !If [HasKMSKey, true, !Ref 'AWS::NoValue']
-#          KmsKeyId: !If [HasKMSKey, {'Fn::ImportValue': !Sub '${ParentKMSStackName}-EBSKeyArn'}, !Ref 'AWS::NoValue']
-#          VolumeSize: 30
-#          VolumeType: gp2
-#      NetworkInterfaces:
-#      - DeviceIndex: '0'
-#        NetworkInterfaceId: !Ref NetworkInterface
-#      UserData:
-#        'Fn::Base64': !Sub |
-#          #!/bin/bash -ex
-#          yum update -y 
-#          yum install -y aws-cfn-bootstrap cloud-init aws-cli 
-#          #/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region} #--configsets proxy_setup
-#          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
-#          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
-#      Tags:
-#        - Key: Name
-#          Value: !Sub ${Prefix}-ec2-instance-proxy
-#    CreationPolicy:
-#      ResourceSignal:
-#        Count: 1
-#        Timeout: PT10M
-#
 #  NetworkInterface:
 #    Type: 'AWS::EC2::NetworkInterface'
 #    Properties:
