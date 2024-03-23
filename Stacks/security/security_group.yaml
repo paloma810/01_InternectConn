@@ -1,0 +1,201 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for creating a security group.'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "SecurityGroup Configuration"
+        Parameters: 
+          - LocalIP
+          - NetworkStackName
+          - PeerNetworkStackName
+          - Prefix
+
+Parameters:
+  LocalIP:
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: "([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})/(\\d{1,2})"
+    Description: Global IP of Local PC to allow ssh traffic.
+  NetworkStackName:
+    Type: String
+    Description: Name of the stack where VPC is created
+  PeerNetworkStackName:
+    Type: String
+    Description: Name of the stack where Peer VPC is created
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names.  
+  
+Resources:
+  VpcEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for VPC Endpoint"
+      VpcId: !ImportValue
+        Fn::Sub: "${NetworkStackName}-VPC"
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !ImportValue
+            Fn::Sub: "${NetworkStackName}-VPCCidr"
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sg-vpce
+
+  PrivateLinuxBaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow SSH from the localPC and egress to VPCEndpoint"
+      VpcId: !ImportValue
+        Fn::Sub: "${NetworkStackName}-VPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !ImportValue
+            Fn::Sub: "${NetworkStackName}-VPCCidr"
+        - IpProtocol: icmp
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp: !ImportValue
+            Fn::Sub: "${NetworkStackName}-VPCCidr"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          DestinationSecurityGroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sg-prilinuxbase
+
+  PrivateWindowsBaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow RDP from the localPC and all egress to VPCEndpoint"
+      VpcId: !ImportValue
+        Fn::Sub: "${NetworkStackName}-VPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '3389'
+          ToPort: '3389'
+          CidrIp: !ImportValue
+            Fn::Sub: "${NetworkStackName}-VPCCidr"
+        - IpProtocol: icmp
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp: !ImportValue
+            Fn::Sub: "${NetworkStackName}-VPCCidr"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          DestinationSecurityGroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sg-priwinbase
+
+  BastionSecurityGroup:
+  # allow inbound ssh and rdp from the localPC, and all egress to VPC CIDR.
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow SSH and RDP from the localPC and all egress to VPC"
+      VpcId: !ImportValue
+        Fn::Sub: "${NetworkStackName}-VPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref LocalIP
+        - IpProtocol: tcp
+          FromPort: '3389'
+          ToPort: '3389'
+          CidrIp: !Ref LocalIP
+        - IpProtocol: icmp
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp: !Ref LocalIP
+      SecurityGroupEgress:
+        - IpProtocol: '-1'  # Allow all outbound traffic
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sg-bastion
+
+  ProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and HTTPS from the Peer VPC"
+      VpcId: !ImportValue
+        Fn::Sub: "${NetworkStackName}-VPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '3128'
+          ToPort: '3128'
+          CidrIp: !ImportValue
+            Fn::Sub: "${PeerNetworkStackName}-VPCCidr"
+      SecurityGroupEgress:
+        - IpProtocol: '-1'  # Allow http and https outbound traffic
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sg-proxy
+
+  ReverseProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and HTTPS from the Internet"
+      VpcId: !ImportValue
+        Fn::Sub: "${NetworkStackName}-VPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+      SecurityGroupEgress:
+        - IpProtocol: '-1'  # Allow all outbound traffic
+          CidrIp: !ImportValue
+            Fn::Sub: "${PeerNetworkStackName}-VPCCidr"
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sg-revproxy
+
+Outputs:
+  VpcEndpointSecurityGroupId:
+    Value: !Ref VpcEndpointSecurityGroup
+    Description: "Security Group ID for VPC Endpoint"
+    Export:
+      Name: !Sub '${AWS::StackName}-SG-VPCE'
+  PrivateLinuxBaseSecurityGroupId:
+    Value: !Ref PrivateLinuxBaseSecurityGroup
+    Description: "Security Group ID for Linux"
+    Export:
+      Name: !Sub '${AWS::StackName}-SG-PriLinux'
+  PrivateWindowsBaseSecurityGroupId:
+    Value: !Ref PrivateWindowsBaseSecurityGroup
+    Description: "Security Group ID for Windows"
+    Export:
+      Name: !Sub '${AWS::StackName}-SG-PriWin'
+  BastionSecurityGroupId:
+    Value: !Ref BastionSecurityGroup
+    Description: "Security Group ID for bastion"
+    Export:
+      Name: !Sub '${AWS::StackName}-SG-Bastion'
+  ProxySecurityGroupId:
+    Value: !Ref ProxySecurityGroup
+    Description: "Security Group ID for proxy"
+    Export:
+      Name: !Sub '${AWS::StackName}-SG-Proxy'
+  ReverseProxySecurityGroupId:
+    Value: !Ref ReverseProxySecurityGroup
+    Description: "Security Group ID for reverse proxy"
+    Export:
+      Name: !Sub '${AWS::StackName}-SG-RevProxy'
