@@ -146,27 +146,79 @@ Resources:
           Value: !Sub ${Prefix}-sg-proxy
 
   ReverseProxySecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: "Allow HTTP and HTTPS from the Internet"
+      VpcId: !ImportValue
+        Fn::Sub: "${NetworkStackName}-VPC"
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sg-revproxy
+  ReverseProxySecurityGroupIngress1:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref ReverseProxySecurityGroup
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+  ReverseProxySecurityGroupIngress2:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref ReverseProxySecurityGroup
+      IpProtocol: tcp
+      FromPort: '443'
+      ToPort: '443'
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+  ReverseProxySecurityGroupEgress:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref ReverseProxySecurityGroup
+      IpProtocol: '-1'
+      CidrIp: !ImportValue
+        Fn::Sub: "${PeerNetworkStackName}-VPCCidr"
+
+  AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: "Allow HTTP and HTTPS from the Internet"
       VpcId: !ImportValue
         Fn::Sub: "${NetworkStackName}-VPC"
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: '80'
-          ToPort: '80'
-          CidrIp: '0.0.0.0/0'
-        - IpProtocol: tcp
-          FromPort: '443'
-          ToPort: '443'
-          CidrIp: '0.0.0.0/0'
-      SecurityGroupEgress:
-        - IpProtocol: '-1'  # Allow all outbound traffic
-          CidrIp: !ImportValue
-            Fn::Sub: "${PeerNetworkStackName}-VPCCidr"
       Tags:
         - Key: Name
-          Value: !Sub ${Prefix}-sg-revproxy
+          Value: !Sub ${Prefix}-sg-alb
+  AlbSecurityGroupIngress1:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: '0.0.0.0/0'
+  AlbSecurityGroupIngress2:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref AlbSecurityGroup  
+      IpProtocol: tcp
+      FromPort: '443'
+      ToPort: '443'
+      CidrIp: '0.0.0.0/0'
+  AlbSecurityGroupEgress1:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      DestinationSecurityGroupId: !Ref ReverseProxySecurityGroup # Web-SGのセキュリティグループID
+  AlbSecurityGroupEgress2:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref ReverseProxySecurityGroup # Web-SGのセキュリティグループID
 
 Outputs:
   VpcEndpointSecurityGroupId:
@@ -199,3 +251,8 @@ Outputs:
     Description: "Security Group ID for reverse proxy"
     Export:
       Name: !Sub '${AWS::StackName}-SG-RevProxy'
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Description: "Security Group ID for ALB"
+    Export:
+      Name: !Sub '${AWS::StackName}-SG-ALB' 
