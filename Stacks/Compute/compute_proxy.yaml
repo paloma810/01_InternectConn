@@ -1,0 +1,425 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for deploying Squid Proxy Server and Nginx Reverse Proxy Server'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentNetworkStackName
+          - ParentSecurityGroupStackName
+          - ParentKMSStackName
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - KeyName
+          - Prefix
+
+Parameters:
+  ParentKMSStackName:
+    Description: Name of an active CloudFormation stack that contains the KMS resources.
+    Type: String
+    Default: "KMS2"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentNetworkStackName:
+    Description: Name of an active CloudFormation stack that contains the networking resources.
+    Type: String
+    Default: "Network1"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack. 
+  ParentSecurityGroupStackName:
+    Type: String
+    Default: "SecurityGroup1"
+    Description: Name of the stack where SecurityGroup is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where SecurityGroup is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names.  
+
+Conditions:
+  HasKMSKey: !Not [!Equals [!Ref ParentKMSStackName, '']]
+  HasKeyName: !Not [!Equals [!Ref KeyName, '']]
+
+Resources:
+
+  ProxyAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${Prefix}-asg-proxy"
+      # 起動させるサブネットを指定
+      VPCZoneIdentifier:
+        - {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PrivateSubnetA'}
+        - {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PrivateSubnetB'}
+      # 起動テンプレート
+      LaunchTemplate:
+        # 起動テンプレートのID
+        LaunchTemplateId: !Ref 'ProxyLaunchTemplate'
+        # 起動テンプレートのバージョン番号
+        Version: !GetAtt 'ProxyLaunchTemplate.LatestVersionNumber'
+      # 台数設定
+      DesiredCapacity: 2
+      MaxSize: 2
+      MinSize: 2
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-instance-proxy"
+          PropagateAtLaunch: true
+
+  ProxyLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${Prefix}-lunch-template-proxy
+      LaunchTemplateData:
+        ImageId: 'ami-0300c29883fc847bf' # RHEL-8.6.0_HVM-20231009-x86_64-59-Hourly2-GP2
+        InstanceType: t2.small
+        KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
+        BlockDeviceMappings: 
+          - Ebs:
+              Encrypted: !If [HasKMSKey, true, !Ref 'AWS::NoValue']
+              KmsKeyId: !If [HasKMSKey, {'Fn::ImportValue': !Sub '${ParentKMSStackName}-EBSKeyArn'}, !Ref 'AWS::NoValue']
+              VolumeSize: 10
+              VolumeType: gp2
+              DeleteOnTermination: true
+            DeviceName: /dev/xvda
+        #NetworkInterfaces:
+        #  - DeviceIndex: 0
+        #    AssociatePublicIpAddress: false
+        #    Groups:
+        #      - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-PriLinux'}
+        #      - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-Proxy'}
+        #    DeleteOnTermination: true
+        SecurityGroupIds:
+          - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-PriLinux'}
+          - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-Proxy'}
+        IamInstanceProfile:
+          Arn: !GetAtt
+            - ProxyInstanceProfile
+            - Arn
+        Monitoring:
+          Enabled: true
+        UserData:
+          'Fn::Base64': !Sub |
+            #!/bin/bash -ex
+            sudo yum update -y 
+            
+            # Install SSM agent
+            sudo yum install -y https://s3.${AWS::Region}.amazonaws.com/amazon-ssm-${AWS::Region}/latest/linux_amd64/amazon-ssm-agent.rpm
+
+            # Install pip
+            sudo yum -y install python3-pip
+
+            # Install AWS CLI and CFN Bootstrap
+            sudo pip3 install awscli
+            sudo pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz   
+            sudo cp -a /usr/local/init/ubuntu/cfn-hup /etc/init.d/cfn-hup
+            sudo chmod u+x /etc/init.d/cfn-hup
+
+            # Run cfn-init and cfn-signal
+            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
+        TagSpecifications:
+          -
+            ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${Prefix}-ec2-instance-proxy
+    Metadata:
+      'AWS::CloudFormation::Init':
+        configSets:
+          default: [cloudwatch, config]
+        cloudwatch:
+          packages:
+            rpm:
+              cloudwatch: 'https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm'
+          files:
+            '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json': # https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html
+              content: !Sub |
+                {
+                  "logs": {
+                    "logs_collected": {
+                      "files": {
+                        "collect_list": [{
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.log",
+                           "log_stream_name": "{instance_id}/var/log/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.log",
+                           "timestamp_format": "%Y-%m-%dT%H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/amazon/amazon-cloudwatch-agent/configuration-validation.log",
+                           "log_stream_name": "{instance_id}/var/log/amazon/amazon-cloudwatch-agent/configuration-validation.log",
+                           "timestamp_format": "%Y/%m/%d %H:%M:%S"
+                        }, {
+                          "log_group_name": "${ProxyLogs}",
+                          "file_path": "/var/log/amazon/ssm/amazon-ssm-agent.log",
+                          "log_stream_name": "{instance_id}/var/log/amazon/ssm/amazon-ssm-agent.log",
+                          "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/amazon/ssm/errors.log",
+                           "log_stream_name": "{instance_id}/var/log/amazon/ssm/errors.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/audit/audit.log",
+                           "log_stream_name": "{instance_id}/var/log/audit/audit.log"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/boot.log",
+                           "log_stream_name": "{instance_id}/var/log/boot.log"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/cfn-hup.log",
+                           "log_stream_name": "{instance_id}/var/log/cfn-hup.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/cfn-init-cmd.log",
+                           "log_stream_name": "{instance_id}/var/log/cfn-init-cmd.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/cfn-init.log",
+                           "log_stream_name": "{instance_id}/var/log/cfn-init.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/cfn-wire.log",
+                           "log_stream_name": "{instance_id}/var/log/cfn-wire.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/cloud-init-output.log",
+                           "log_stream_name": "{instance_id}/var/log/cloud-init-output.log"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/cloud-init.log",
+                           "log_stream_name": "{instance_id}/var/log/cloud-init.log",
+                           "timestamp_format": "%b %d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/cron",
+                           "log_stream_name": "{instance_id}/var/log/cron",
+                           "timestamp_format": "%b %-d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/dmesg",
+                           "log_stream_name": "{instance_id}/var/log/dmesg"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/grubby_prune_debug",
+                           "log_stream_name": "{instance_id}/var/log/grubby_prune_debug"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/maillog",
+                           "log_stream_name": "{instance_id}/var/log/maillog",
+                           "timestamp_format": "%b %-d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/messages",
+                           "log_stream_name": "{instance_id}/var/log/messages",
+                           "timestamp_format": "%b %-d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/secure",
+                           "log_stream_name": "{instance_id}/var/log/secure",
+                           "timestamp_format": "%b %-d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${ProxyLogs}",
+                           "file_path": "/var/log/yum.log",
+                           "log_stream_name": "{instance_id}/var/log/yum.log",
+                           "timestamp_format": "%b %d %H:%M:%S"
+                        }]
+                      }
+                    }
+                  },
+                  "metrics": {
+                    "namespace": "${AWS::StackName}",
+                    "append_dimensions": {
+                      "InstanceId": "${!aws:InstanceId}"
+                    },
+                    "metrics_collected": {
+                      "mem": {
+                        "measurement": [
+                          "mem_used_percent"
+                        ]
+                      },
+                      "swap": {
+                        "measurement": [
+                          "swap_used_percent"
+                        ]
+                      },
+                      "disk": {
+                        "resources": [
+                          "/"
+                        ],
+                        "measurement": [
+                          "used_percent"
+                        ],
+                        "drop_device": true
+                      }
+                    }
+                  }
+                }
+              mode: '000644'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              'amazon-cloudwatch-agent':
+                enabled: true
+                ensureRunning: true
+                files:
+                - '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json'
+                packages:
+                - cloudwatch
+        config:
+          files:
+            '/etc/cfn/cfn-hup.conf':
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+                interval=1
+              mode: '000400'
+              owner: root
+              group: root
+            '/etc/cfn/hooks.d/cfn-auto-reloader.conf':
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.VirtualMachine.Metadata.AWS::CloudFormation::Init
+                action=/usr/local/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=VirtualMachine
+                runas=root
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+                files:
+                - '/etc/cfn/cfn-hup.conf'
+                - '/etc/cfn/hooks.d/cfn-auto-reloader.conf'
+              #amazon-ssm-agent:
+              #  enabled: true
+              #  ensureRunning: true
+
+  #ProxyInstance1: 
+  #  Type: AWS::EC2::Instance 
+  #  Properties:
+  #    LaunchTemplate:
+  #      LaunchTemplateName: !Sub ${Prefix}-lunch-template-proxy
+  #      Version: !GetAtt ProxyLunchTemplate.LatestVersionNumber
+  #    SubnetId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PrivateSubnetA'}
+  #    SourceDestCheck: false
+
+  #ProxyInstance2: 
+  #  Type: AWS::EC2::Instance 
+  #  Properties:
+  #    LaunchTemplate:
+  #      LaunchTemplateName: !Sub ${Prefix}-lunch-template-proxy
+  #      Version: !GetAtt ProxyLunchTemplate.LatestVersionNumber
+  #    SubnetId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PrivateSubnetB'}
+  #    SourceDestCheck: false
+
+#  NetworkInterface:
+#    Type: 'AWS::EC2::NetworkInterface'
+#    Properties:
+#      GroupSet:
+#      - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-PriLinux'}
+#      - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-Proxy'}
+#      SubnetId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PrivateSubnetA'}
+
+  ProxyInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+      - {'Fn::ImportValue': !Sub '${ParentIAMStackName}-ROLE-Ec2'}
+
+  ProxyLogs:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      RetentionInDays: 7
+
+  #スケーリングポリシー(スケールUP)
+  ProxyScaleUpPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AdjustmentType: ChangeInCapacity #ScalingAdjustmentの数値の解釈。増減か、その数に変更か、パーセンテージ増減か。ここでは指定の数を増減。
+      AutoScalingGroupName: !Ref ProxyAutoScalingGroup #どのASGに対するポリシーか。
+      Cooldown: '60' #秒単位のクールダウン期間
+      ScalingAdjustment: '1' #↑AdjustmentTypeで説明済み。
+      
+  #スケーリングポリシー(スケールDOWN)
+  ProxyScaleDownPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref ProxyAutoScalingGroup
+      Cooldown: '60'
+      ScalingAdjustment: '-1' #同じ条件で1減らす。
+  
+  #クラウドウォッチアラーム(上)
+  ProxyCPUAlarmHigh:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      #このアラームの説明
+      AlarmDescription: Scale-up if CPU > 80% for 10 minutes #「10分でCPUが90%超えたらスケールアップするよ。」
+      MetricName: CPUUtilization #CPU使用率メトリック
+      Namespace: AWS/EC2 
+      Statistic: Average #平均
+      Period: '300' #5分が
+      EvaluationPeriods: '2' #2回 評価期間
+      Threshold: '80' #閾値
+      AlarmActions: #このアラームがなった時のアクション
+        - !Ref ProxyScaleUpPolicy #スケールアップポリシー
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref ProxyAutoScalingGroup
+      ComparisonOperator: GreaterThanThreshold #より大きい ">"の事。 他にはGreaterThanOrEqualToThreshold(以上)、 LessThanOrEqualToThreshold(以下)、LessThanThreshold(より低い)がある。
+  
+  #クラウドウォッチアラーム(下)
+  ProxyCPUAlarmLow:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: Scale-down if CPU < 60% for 10 minutes #「10分でCPUが70%より低くなったらスケールダウンするよ。」
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '300'
+      EvaluationPeriods: '2'
+      Threshold: '60'
+      AlarmActions:
+        - !Ref ProxyScaleDownPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref ProxyAutoScalingGroup
+      ComparisonOperator: LessThanThreshold
+
+Outputs:
+#  ProxyInstance1ID:
+#    Value: !Ref ProxyInstance1
+#    Description: "Instance ID of the Squid Proxy Server1"
+#    Export:
+#      Name: !Sub '${AWS::StackName}-Instance-Proxy1'
+#  ProxyInstance2ID:
+#    Value: !Ref ProxyInstance2
+#    Description: "Instance ID of the Squid Proxy Server2"
+#    Export:
+#      Name: !Sub '${AWS::StackName}-Instance-Proxy2'
+  ProxyLaunchTemplate:
+    Value: !Ref ProxyLaunchTemplate
+    Description: "Launch Template ID for Proxy"
+    Export:
+      Name: !Sub "${AWS::StackName}-launchtemplate-proxy"
+  
