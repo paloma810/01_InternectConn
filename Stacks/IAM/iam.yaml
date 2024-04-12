@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - Prefix
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
+
+Resources:
+
+  EC2IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        - "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-role-ec2
+
+Outputs:
+  EC2IAM:
+    Description: IAM for EC2
+    Value: !Ref EC2IAMRole
+    Export:
+      Name: !Sub ${AWS::StackName}-ROLE-Ec2
