@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for deploying Squid Proxy Server and Nginx Reverse Proxy Server'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentNetworkStackName
+          - ParentSecurityGroupStackName
+          - ParentKMSStackName
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - KeyName
+          - Prefix
+
+Parameters:
+  ParentKMSStackName:
+    Description: Name of an active CloudFormation stack that contains the KMS resources.
+    Type: String
+    Default: "KMS2"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentNetworkStackName:
+    Description: Name of an active CloudFormation stack that contains the networking resources.
+    Type: String
+    Default: "Network1"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack. 
+  ParentSecurityGroupStackName:
+    Type: String
+    Default: "SecurityGroup1"
+    Description: Name of the stack where SecurityGroup is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where SecurityGroup is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names.  
+
+Conditions:
+  HasKMSKey: !Not [!Equals [!Ref ParentKMSStackName, '']]
+  HasKeyName: !Not [!Equals [!Ref KeyName, '']]
+
+Resources:
+
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      ImageId: 'ami-0a211f4f633a3af5f' # Amazon Linux 2 AMI (HVM) - Kernel 5.10, SSD Volume Type
+      InstanceType: t2.micro
+      KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
+      BlockDeviceMappings:
+        - Ebs:
+            Encrypted: !If [HasKMSKey, true, !Ref 'AWS::NoValue']
+            KmsKeyId: !If [HasKMSKey, {'Fn::ImportValue': !Sub '${ParentKMSStackName}-EBSKeyArn'}, !Ref 'AWS::NoValue']
+            VolumeSize: 8
+            VolumeType: gp2
+          DeviceName: '/dev/xvda'
+      SubnetId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PublicSubnetA'}
+      SecurityGroupIds:
+          - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-Bastion'}
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -ex
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource BastionInstance --region ${AWS::Region}
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource BastionInstance --region ${AWS::Region}
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-ec2-instance-bastion
+
+#  NetworkInterface:
+#    Type: 'AWS::EC2::NetworkInterface'
+#    Properties:
+#      GroupSet:
+#      - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-PriLinux'}
+#      - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-Proxy'}
+#      SubnetId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PrivateSubnetA'}
+
+  BastionInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+      - {'Fn::ImportValue': !Sub '${ParentIAMStackName}-ROLE-Ec2'}
+
+Outputs:
+  BastionInstanceID:
+    Value: !Ref BastionInstance
+    Description: "Instance ID of the Bastion Server"
+    Export:
+      Name: !Sub '${AWS::StackName}-Instance-Bastion'
+  
