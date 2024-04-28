@@ -239,8 +239,6 @@ Resources:
       InstanceId:   !If [ BuildNATInstance, !Ref NATInstance, !Ref "AWS::NoValue" ]
       # If we are using a NAT Gateway, route traffic through the NAT Gateway:
       NatGatewayId: !If [ BuildNATGateway, !Ref NATGateway, !Ref "AWS::NoValue" ]
-      # Otherwise, route traffic through the Local Gateway:
-      GatewayId: !If [ BuildNoNat, local, !Ref "AWS::NoValue" ]
 
   # Attach the public subnets to public route tables, 
   # and attach the private subnets to private route tables:    
