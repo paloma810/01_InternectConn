@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for creating a CloudTrail'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentSNSStackName
+          - ParentKMSStackName
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - Prefix
+          - ExternalTrailBucket
+          - S3DataEvents
+
+Parameters:
+  ParentKMSStackName:
+    Description: Name of an active CloudFormation stack that contains the KMS resources.
+    Type: String
+    Default: "KMS2"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentSNSStackName:
+    Description: Name of an active CloudFormation stack that contains the SNS resources.
+    Type: String
+    Default: "SNS1"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where IAM is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
+  ExternalTrailBucket:
+    Description: 'Optional The name of the Amazon S3 bucket where CloudTrail publishes log files. If you leave this empty, the Amazon S3 bucket is created for you.'
+    Type: String
+    Default: ''
+  S3DataEvents:
+    Description: 'Record data events of all S3 buckets? (Warning: additional charges apply.)'
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'true'
+    - 'false'
+
+Conditions:
+  HasSNSTopic: !Not [!Equals [!Ref ParentSNSStackName, '']]
+  HasParentKMSStack: !Not [!Equals [!Ref ParentKMSStackName, '']]
+  InternalBucket: !Equals [!Ref ExternalTrailBucket, '']
+  ExternalBucket: !Not [!Equals [!Ref ExternalTrailBucket, '']]
+  IsS3DataEvents: !Equals [!Ref S3DataEvents, 'true']
+
+Resources:
+  TrailBucket:
+    Condition: InternalBucket
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${Prefix}-cloudtrail-bucket'
+      BucketEncryption:
+        # no use KMS key (use sse-s3)
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteRule
+            Status: Enabled
+            ExpirationInDays: 365
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration: # AWS Foundational Security Best Practices v1.0.0 S3.8
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Prefix}-cloudtrail-bucket'
+
+  TrailBucketPolicy:
+    Condition: InternalBucket
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref TrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AWSCloudTrailAclCheck
+          Effect: Allow
+          Principal:
+            Service: 'cloudtrail.amazonaws.com'
+          Action: 's3:GetBucketAcl'
+          Resource: !Sub 'arn:aws:s3:::${TrailBucket}'
+        - Sid: AWSCloudTrailWrite
+          Effect: Allow
+          Principal:
+            Service: 'cloudtrail.amazonaws.com'
+          Action: 's3:PutObject'
+          Resource: !Sub 'arn:aws:s3:::${TrailBucket}/AWSLogs/${AWS::AccountId}/*'
+          Condition:
+            StringEquals:
+              's3:x-amz-acl': 'bucket-owner-full-control'
+        - Sid: AllowSSLRequestsOnly # AWS Foundational Security Best Practices v1.0.0 S3.5
+          Effect: Deny
+          Principal: '*'
+          Action: 's3:*'
+          Resource:
+          - !GetAtt 'TrailBucket.Arn'
+          - !Sub '${TrailBucket.Arn}/*'
+          Condition:
+            Bool:
+              'aws:SecureTransport': false
+  TrailLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      RetentionInDays: 7
+
+  Trail:
+    Condition: InternalBucket
+    DependsOn:
+    - TrailBucketPolicy
+    Type: 'AWS::CloudTrail::Trail'
+    Properties:
+      IncludeGlobalServiceEvents: true
+      IsLogging: true
+      IsMultiRegionTrail: false
+      EventSelectors: !If [IsS3DataEvents, [{DataResources: [{Type: 'AWS::S3::Object', Values: ['arn:aws:s3:::']}], IncludeManagementEvents: true, ReadWriteType: All}], !Ref 'AWS::NoValue']
+      KMSKeyId: !If [HasParentKMSStack, {'Fn::ImportValue': !Sub '${ParentKMSStackName}-CloudTrailKeyId'}, !Ref 'AWS::NoValue']
+      S3BucketName: !Ref TrailBucket
+      S3KeyPrefix: ''
+      EnableLogFileValidation: true
+      CloudWatchLogsLogGroupArn: !Sub '${TrailLogGroup.Arn}'
+      CloudWatchLogsRoleArn: {'Fn::ImportValue': !Sub '${ParentIAMStackName}-ROLE-TrailArn'}
+   #SnsTopicName: {'Fn::ImportValue': !Sub '${ParentSNSStackName}-SNSTopicTrail'}
+  ExternalTrail:
+    Condition: ExternalBucket
+    Type: 'AWS::CloudTrail::Trail'
+    Properties:
+      IncludeGlobalServiceEvents: true
+      IsLogging: true
+      IsMultiRegionTrail: false
+      EventSelectors: !If [IsS3DataEvents, [{DataResources: [{Type: 'AWS::S3::Object', Values: ['arn:aws:s3:::']}], IncludeManagementEvents: true, ReadWriteType: All}], !Ref 'AWS::NoValue']
+      KMSKeyId: !If [HasParentKMSStack, {'Fn::ImportValue': !Sub '${ParentKMSStackName}-CloudTrailKeyId'}, !Ref 'AWS::NoValue']
+      S3BucketName: !Ref ExternalTrailBucket
+      S3KeyPrefix: ''
+      EnableLogFileValidation: true
+      CloudWatchLogsLogGroupArn: !Sub '${TrailLogGroup.Arn}'
+      CloudWatchLogsRoleArn: {'Fn::ImportValue': !Sub '${ParentIAMStackName}-ROLE-TrailArn'}
+      #SnsTopicName: {'Fn::ImportValue': !Sub '${ParentSNSStackName}-SNSTopicTrail'}

@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for EventBridge'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentSNSStackName
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - Prefix
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
+  ParentSNSStackName:
+    Description: Name of an active CloudFormation stack that contains the SNS resources.
+    Type: String
+    Default: "SNS1"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where IAM is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+
+Resources:
+  ###############
+  # EventBridge #
+  ###############
+
+  EventRuleGuardDuty:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: GuardDuty Notice
+      EventPattern: 
+        source: 
+          - aws.guardduty
+        detail-type: 
+          - 'GuardDuty Finding'
+        detail: 
+          severity:
+            - 7
+            - 7.0
+            - 7.1
+            - 7.2
+            - 7.3
+            - 7.4
+            - 7.5
+            - 7.6
+            - 7.7
+            - 7.8
+            - 7.9
+            - 8
+            - 8.0
+            - 8.1
+            - 8.2
+            - 8.3
+            - 8.4
+            - 8.5
+            - 8.6
+            - 8.7
+            - 8.8
+            - 8.9
+      Name: !Sub '${Prefix}-eventrule-guardduty'
+      State: ENABLED
+      Targets: 
+        - Arn: {'Fn::ImportValue': !Sub '${ParentSNSStackName}-SNSTopicEvent'}
+          Id: guardduty-event
+          InputTransformer: 
+            InputPathsMap: 
+              'severity': '$.detail.severity'
+              'Account_ID': '$.detail.accountId'
+              'Finding_ID': '$.detail.id'
+              'Finding_Type': '$.detail.type'
+              'region': '$.region'
+              'time': '$.time'
+              'Finding_description': '$.detail.description'
+            InputTemplate: |
+              "GuardDuty Notification"
+              "AWSアカウント：<Account_ID> で重要度：<severity> のイベントが検出されました。"
+              "検出時間：<time>"
+              "検出タイプ：<Finding_Type>"
+              "リージョン：<region>"
+              "検出タイプ説明：<Finding_description>."
+              "マネジメントコンソールから詳細をご確認ください。https://console.aws.amazon.com/guardduty/home?region=<region>#/findings?search=id=<Finding_ID>"
+
+  EventRuleSecurityHub:
+    Type: AWS::Events::Rule
+    Properties: 
+      EventPattern: 
+        detail-type: 
+        - "Security Hub Findings - Imported"
+        source:
+        - "aws.securityhub"
+        detail:
+          findings: 
+            Severity:
+              Label:
+                - CRITICAL
+                - HIGH                
+                - MEDIUM
+              ProductName:
+                - Security Hub
+      Name: !Sub '${Prefix}-eventrule-securityhub'
+      State: ENABLED
+      Targets: 
+        - Arn: {'Fn::ImportValue': !Sub '${ParentSNSStackName}-SNSTopicEvent'}
+          Id: securityhub-event
+          InputTransformer: 
+            InputPathsMap: 
+              'severity': '$.detail.findings[0].Severity.Label'
+              'Account_ID': '$.detail.findings[0].AwsAccountId'
+              'region': '$.detail.findings[0].Resources[0].Region'
+              'date': '$.detail.findings[0].UpdatedAt'
+              'Finding_description': '$.detail.findings[0].Description'
+            InputTemplate: |
+              "Security Hub Notification"
+              "AWSアカウント：<Account_ID> で重要度：<severity> のイベントが検出されました。"
+              "リージョン：<region>"
+              "検出時間：<date>"
+              "検出タイプ説明：<Finding_description>."

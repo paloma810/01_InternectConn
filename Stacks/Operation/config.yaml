@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for creating a AWS Config'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentSNSStackName
+          - ParentKMSStackName
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - ExternalConfigBucket
+          - Prefix
+
+Parameters:
+  ParentKMSStackName:
+    Description: Name of an active CloudFormation stack that contains the KMS resources.
+    Type: String
+    Default: "KMS2"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentSNSStackName:
+    Description: Name of an active CloudFormation stack that contains the SNS resources.
+    Type: String
+    Default: "SNS1"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where IAM is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
+  ExternalConfigBucket:
+    Description: 'Optional The name of the Amazon S3 bucket where Config publishes log files. If you leave this empty, the Amazon S3 bucket is created for you.'
+    Type: String
+    Default: ''
+
+Conditions:
+  InternalBucket: !Equals [!Ref ExternalConfigBucket, '']
+  ExternalBucket: !Not [!Equals [!Ref ExternalConfigBucket, '']]
+
+Resources:
+  ConfigBucket:
+    Condition: InternalBucket
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${Prefix}-config-bucket'
+      BucketEncryption:
+        # no use KMS key (use sse-s3)
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteRule
+            Status: Enabled
+            ExpirationInDays: 365
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration: # AWS Foundational Security Best Practices v1.0.0 S3.8
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Prefix}-config-bucket'
+  ConfigBucketPolicy:
+    Condition: InternalBucket
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref ConfigBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowSSLRequestsOnly # AWS Foundational Security Best Practices v1.0.0 S3.5
+          Effect: Deny
+          Principal: '*'
+          Action: 's3:*'
+          Resource:
+          - !GetAtt 'ConfigBucket.Arn'
+          - !Sub '${ConfigBucket.Arn}/*'
+          Condition:
+            Bool:
+              'aws:SecureTransport': false
+
+  DeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    Properties:
+      Name: !Sub '${Prefix}-delivery-channel'
+      ConfigSnapshotDeliveryProperties:
+        DeliveryFrequency: One_Hour
+      S3BucketName: !If [InternalBucket, !Ref ConfigBucket, !Ref ExternalConfigBucket]
+      #SnsTopicARN: {'Fn::ImportValue': !Sub '${ParentSNSStackName}-SNSTopicConfig'}
+
+  ConfigRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    Properties:
+      RecordingGroup:
+        AllSupported: true
+        IncludeGlobalResourceTypes: true
+      RoleARN: {'Fn::ImportValue': !Sub '${ParentIAMStackName}-ROLE-ConfigArn'}

@@ -1,0 +1,283 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for creating SNS'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentKMSStackName
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - Prefix
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
+  ParentKMSStackName:
+    Description: Name of an active CloudFormation stack that contains the KMS resources.
+    Type: String
+    Default: "KMS2"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where IAM is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+
+Resources:
+
+# 一旦簡単化のため、KMS（CMEK）による暗号化はしない
+
+  #######
+  # SNS #
+  #######
+
+  # no use because SNS alert option set False on creating CloudTrail
+  TrailTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties: 
+      TopicName: !Sub ${Prefix}-sns-topic-trail
+      DisplayName: !Sub ${Prefix}-sns-topic-trail
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sns-topic-trail
+
+  TrailTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AWSCloudTrailSNSPolicy
+          Effect: Allow
+          Principal:
+            Service: 'cloudtrail.amazonaws.com'
+          Resource: !Ref TrailTopic
+          Action: 'sns:Publish'
+      Topics:
+      - !Ref TrailTopic
+
+  # Lambda Subscription filter send log message to SNS
+  CWLogsTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties: 
+      TopicName: !Sub ${Prefix}-sns-topic-cwlogs
+      DisplayName: !Sub ${Prefix}-sns-topic-cwlogs
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sns-topic-cwlogs
+
+  CWLogsTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: WLogsTopicPolicy
+            Effect: Allow
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sns:Publish"
+            Resource: !Ref CWLogsTopic
+      Topics:
+        - !Ref CWLogsTopic
+
+  # CloudWatch Alerm send alert to SNS
+  CWMetricsTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties: 
+      TopicName: !Sub ${Prefix}-sns-topic-cwmetrics
+      DisplayName: !Sub ${Prefix}-sns-topic-cwmetrics
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sns-topic-cwmetrics
+
+  CWMetricsTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CWMetricsTopicPolicy
+            Effect: Allow
+            Principal:
+              Service: "cloudwatch.amazonaws.com"
+            Action: "sns:Publish"
+            Resource: !Ref CWMetricsTopic
+      Topics:
+        - !Ref CWMetricsTopic
+
+  # Event Bridge send alert to SNS
+  EventTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties: 
+      TopicName: !Sub ${Prefix}-sns-topic-event
+      DisplayName: !Sub ${Prefix}-sns-topic-event
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sns-topic-event
+
+  EventTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EventTopicPolicy
+            Effect: Allow
+            Principal:
+              Service: "events.amazonaws.com"
+            Action: "sns:Publish"
+            Resource: !Ref EventTopic
+      Topics:
+        - !Ref EventTopic
+
+  #######
+  # SQS #
+  #######
+
+  # CW Logs Queue subscribe CS Logs SNS Topic
+  CWLogsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${Prefix}-sqs-cwlogs
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sqs-cwlogs
+
+  CWLogsTopicSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt CWLogsQueue.Arn
+      TopicArn: !Ref CWLogsTopic
+
+  CWLogsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: CWLogsQueuePolicy
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt CWLogsQueue.Arn
+            Condition:
+              ArnEquals:
+                "aws:SourceArn": !Ref CWLogsTopic
+      Queues:
+        - !Ref CWLogsQueue
+
+  # CW Metrics Queue subscribe CS Metrics SNS Topic
+  CWMetricsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${Prefix}-sqs-cwmetrics
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sqs-cwmetrics
+
+  CWMetricsTopicSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt CWMetricsQueue.Arn
+      TopicArn: !Ref CWMetricsTopic
+
+  CWMetricsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: CWMetricsQueuePolicy
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt CWMetricsQueue.Arn
+            Condition:
+              ArnEquals:
+                "aws:SourceArn": !Ref CWMetricsTopic
+      Queues:
+        - !Ref CWMetricsQueue
+
+  # Event Queue subscribe Event Bridge SNS Topic
+  EventQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${Prefix}-sqs-event
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-sqs-event
+
+  EventTopicSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt EventQueue.Arn
+      TopicArn: !Ref EventTopic
+
+  EventQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: EventQueuePolicy
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt EventQueue.Arn
+            Condition:
+              ArnEquals:
+                "aws:SourceArn": !Ref EventTopic
+      Queues:
+        - !Ref EventQueue
+
+Outputs:
+  SNSTopicTrail:
+    Description: SNS Topic for CloudTrail
+    Value: !Ref TrailTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-SNSTopicTrail
+  SNSTopicCWLogs:
+    Description: SNS Topic for Cloudwatch Logs (Lambda Subscription filter)
+    Value: !Ref  CWLogsTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-SNSTopicCWLogs
+  SNSTopicCWMetrics:
+    Description: SNS Topic for Cloudwatch Metrics
+    Value: !Ref CWMetricsTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-SNSTopicCWMetrics
+  SNSTopicEvent:
+    Description: SNS Topic for Event Bridge
+    Value: !Ref EventTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-SNSTopicEvent
+  SQSQueueCWLogs:
+    Description: SQS Queue for Cloudwatch Logs Topic
+    Value: !Ref  CWLogsQueue
+    Export:
+      Name: !Sub ${AWS::StackName}-QueueCWLogs
+  SQSQueueCWMetrics:
+    Description: SQS Queue for Cloudwatch Metrics Topic
+    Value: !Ref CWMetricsQueue
+    Export:
+      Name: !Sub ${AWS::StackName}-QueueCWMetrics
+  SQSQueueEvent:
+    Description: SQS Queue for Event Topic
+    Value: !Ref EventQueue
+    Export:
+      Name: !Sub ${AWS::StackName}-QueueEvent

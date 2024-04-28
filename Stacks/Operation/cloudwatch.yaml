@@ -1,58 +1,35 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Template for CloudWatch'
+Description: 'Template for Cloud Watch'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentKMSStackName
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - Prefix
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
+  ParentKMSStackName:
+    Description: Name of an active CloudFormation stack that contains the KMS resources.
+    Type: String
+    Default: "KMS2"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where IAM is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
 
 Resources:
-  #スケーリングポリシー(スケールUP)
-  WebServerScaleUpPolicy:
-    Type: 'AWS::AutoScaling::ScalingPolicy'
-    Properties:
-      AdjustmentType: ChangeInCapacity #ScalingAdjustmentの数値の解釈。増減か、その数に変更か、パーセンテージ増減か。ここでは指定の数を増減。
-      AutoScalingGroupName: !Ref WebServerGroup #どのASGに対するポリシーか。
-      Cooldown: '60' #秒単位のクールダウン期間
-      ScalingAdjustment: '1' #↑AdjustmentTypeで説明済み。
-      
-  #スケーリングポリシー(スケールDOWN)
-  WebServerScaleDownPolicy:
-    Type: 'AWS::AutoScaling::ScalingPolicy'
-    Properties:
-      AdjustmentType: ChangeInCapacity
-      AutoScalingGroupName: !Ref WebServerGroup
-      Cooldown: '60'
-      ScalingAdjustment: '-1' #同じ条件で1減らす。
-  
-  #クラウドウォッチアラーム(上)
-  CPUAlarmHigh:
-    Type: 'AWS::CloudWatch::Alarm'
-    Properties:
-      #このアラームの説明
-      AlarmDescription: Scale-up if CPU > 90% for 10 minutes #「10分でCPUが90%超えたらスケールアップするよ。」
-      MetricName: CPUUtilization #CPU使用率メトリック
-      Namespace: AWS/EC2 
-      Statistic: Average #平均
-      Period: '300' #5分が
-      EvaluationPeriods: '2' #2回 評価期間
-      Threshold: '90' #閾値
-      AlarmActions: #このアラームがなった時のアクション
-        - !Ref WebServerScaleUpPolicy #スケールアップポリシー
-      Dimensions:
-        - Name: AutoScalingGroupName
-          Value: !Ref WebServerGroup
-      ComparisonOperator: GreaterThanThreshold #より大きい ">"の事。 他にはGreaterThanOrEqualToThreshold(以上)、 LessThanOrEqualToThreshold(以下)、LessThanThreshold(より低い)がある。
-  
-  #クラウドウォッチアラーム(下)
-  CPUAlarmLow:
-    Type: 'AWS::CloudWatch::Alarm'
-    Properties:
-      AlarmDescription: Scale-down if CPU < 70% for 10 minutes #「10分でCPUが70%より低くなったらスケールダウンするよ。」
-      MetricName: CPUUtilization
-      Namespace: AWS/EC2
-      Statistic: Average
-      Period: '300'
-      EvaluationPeriods: '2'
-      Threshold: '70'
-      AlarmActions:
-        - !Ref WebServerScaleDownPolicy
-      Dimensions:
-        - Name: AutoScalingGroupName
-          Value: !Ref WebServerGroup
-      ComparisonOperator: LessThanThreshold
+

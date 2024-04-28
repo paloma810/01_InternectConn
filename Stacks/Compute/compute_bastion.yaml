@@ -58,7 +58,7 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       IamInstanceProfile: !Ref BastionInstanceProfile
-      ImageId: 'ami-0a211f4f633a3af5f' # Amazon Linux 2 AMI (HVM) - Kernel 5.10, SSD Volume Type
+      ImageId: 'ami-0300c29883fc847bf' # RHEL-8.6.0_HVM-20231009-x86_64-59-Hourly2-GP2
       InstanceType: t2.micro
       KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
       BlockDeviceMappings:
@@ -72,13 +72,208 @@ Resources:
       SecurityGroupIds:
           - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-Bastion'}
       UserData:
-        'Fn::Base64': !Sub |
-          #!/bin/bash -ex
-          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource BastionInstance --region ${AWS::Region}
-          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource BastionInstance --region ${AWS::Region}
+          'Fn::Base64': !Sub |
+            #!/bin/bash -ex
+            sudo yum update -y 
+            
+            # Install SSM agent
+            sudo yum install -y https://s3.${AWS::Region}.amazonaws.com/amazon-ssm-${AWS::Region}/latest/linux_amd64/amazon-ssm-agent.rpm
+
+            # Install pip
+            sudo yum -y install python3-pip
+
+            # Install AWS CLI and CFN Bootstrap
+            sudo pip3 install awscli
+            sudo pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz   
+            sudo cp -a /usr/local/init/ubuntu/cfn-hup /etc/init.d/cfn-hup
+            sudo chmod u+x /etc/init.d/cfn-hup
+
+            # Run cfn-init and cfn-signal
+            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
       Tags:
         - Key: Name
           Value: !Sub ${Prefix}-ec2-instance-bastion
+        - Key: Name
+          Value: !Sub ${Prefix}-ec2-instance-bastion
+    Metadata:
+      'AWS::CloudFormation::Init':
+        configSets:
+          default: [cloudwatch, config]
+        cloudwatch:
+          packages:
+            rpm:
+              cloudwatch: 'https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm'
+          files:
+            '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json': # https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html
+              content: !Sub |
+                {
+                  "logs": {
+                    "logs_collected": {
+                      "files": {
+                        "collect_list": [{
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.log",
+                           "log_stream_name": "{instance_id}/var/log/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.log",
+                           "timestamp_format": "%Y-%m-%dT%H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/amazon/amazon-cloudwatch-agent/configuration-validation.log",
+                           "log_stream_name": "{instance_id}/var/log/amazon/amazon-cloudwatch-agent/configuration-validation.log",
+                           "timestamp_format": "%Y/%m/%d %H:%M:%S"
+                        }, {
+                          "log_group_name": "${BastionLogs}",
+                          "file_path": "/var/log/amazon/ssm/amazon-ssm-agent.log",
+                          "log_stream_name": "{instance_id}/var/log/amazon/ssm/amazon-ssm-agent.log",
+                          "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/amazon/ssm/errors.log",
+                           "log_stream_name": "{instance_id}/var/log/amazon/ssm/errors.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/audit/audit.log",
+                           "log_stream_name": "{instance_id}/var/log/audit/audit.log"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/boot.log",
+                           "log_stream_name": "{instance_id}/var/log/boot.log"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/cfn-hup.log",
+                           "log_stream_name": "{instance_id}/var/log/cfn-hup.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/cfn-init-cmd.log",
+                           "log_stream_name": "{instance_id}/var/log/cfn-init-cmd.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/cfn-init.log",
+                           "log_stream_name": "{instance_id}/var/log/cfn-init.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/cfn-wire.log",
+                           "log_stream_name": "{instance_id}/var/log/cfn-wire.log",
+                           "timestamp_format": "%Y-%m-%d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/cloud-init-output.log",
+                           "log_stream_name": "{instance_id}/var/log/cloud-init-output.log"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/cloud-init.log",
+                           "log_stream_name": "{instance_id}/var/log/cloud-init.log",
+                           "timestamp_format": "%b %d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/cron",
+                           "log_stream_name": "{instance_id}/var/log/cron",
+                           "timestamp_format": "%b %-d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/dmesg",
+                           "log_stream_name": "{instance_id}/var/log/dmesg"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/grubby_prune_debug",
+                           "log_stream_name": "{instance_id}/var/log/grubby_prune_debug"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/maillog",
+                           "log_stream_name": "{instance_id}/var/log/maillog",
+                           "timestamp_format": "%b %-d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/messages",
+                           "log_stream_name": "{instance_id}/var/log/messages",
+                           "timestamp_format": "%b %-d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/secure",
+                           "log_stream_name": "{instance_id}/var/log/secure",
+                           "timestamp_format": "%b %-d %H:%M:%S"
+                        }, {
+                           "log_group_name": "${BastionLogs}",
+                           "file_path": "/var/log/yum.log",
+                           "log_stream_name": "{instance_id}/var/log/yum.log",
+                           "timestamp_format": "%b %d %H:%M:%S"
+                        }]
+                      }
+                    }
+                  },
+                  "metrics": {
+                    "namespace": "${AWS::StackName}",
+                    "append_dimensions": {
+                      "InstanceId": "${!aws:InstanceId}"
+                    },
+                    "metrics_collected": {
+                      "mem": {
+                        "measurement": [
+                          "mem_used_percent"
+                        ]
+                      },
+                      "swap": {
+                        "measurement": [
+                          "swap_used_percent"
+                        ]
+                      },
+                      "disk": {
+                        "resources": [
+                          "/"
+                        ],
+                        "measurement": [
+                          "used_percent"
+                        ],
+                        "drop_device": true
+                      }
+                    }
+                  }
+                }
+              mode: '000644'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              'amazon-cloudwatch-agent':
+                enabled: true
+                ensureRunning: true
+                files:
+                - '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json'
+                packages:
+                - cloudwatch
+        config:
+          files:
+            '/etc/cfn/cfn-hup.conf':
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+                interval=1
+              mode: '000400'
+              owner: root
+              group: root
+            '/etc/cfn/hooks.d/cfn-auto-reloader.conf':
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.VirtualMachine.Metadata.AWS::CloudFormation::Init
+                action=/usr/local/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=VirtualMachine
+                runas=root
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+                files:
+                - '/etc/cfn/cfn-hup.conf'
+                - '/etc/cfn/hooks.d/cfn-auto-reloader.conf'
+              #amazon-ssm-agent:
+              #  enabled: true
+              #  ensureRunning: true
 
 #  NetworkInterface:
 #    Type: 'AWS::EC2::NetworkInterface'
@@ -87,6 +282,11 @@ Resources:
 #      - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-PriLinux'}
 #      - {'Fn::ImportValue': !Sub '${ParentSecurityGroupStackName}-SG-Proxy'}
 #      SubnetId: {'Fn::ImportValue': !Sub '${ParentNetworkStackName}-PrivateSubnetA'}
+
+  BastionLogs:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      RetentionInDays: 7
 
   BastionInstanceProfile:
     Type: 'AWS::IAM::InstanceProfile'

@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for GuardDuty, Security Hub'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentKMSStackName
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - Prefix
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
+  ParentKMSStackName:
+    Description: Name of an active CloudFormation stack that contains the KMS resources.
+    Type: String
+    Default: "KMS2"
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where IAM is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+
+Resources:
+
+  # GuardDutyを有効にする
+  GuardDuty:
+    Type: AWS::GuardDuty::Detector
+    Properties:
+      Enable: true
+
+  # SecurityHubを有効にする
+  SecurityHub:
+    Type: AWS::SecurityHub::Hub
+    Properties:
+      AutoEnableControls: true
+      EnableDefaultStandards: true
+      ControlFindingGenerator: STANDARD_CONTROL
+
+  # EnableDefaultStandards: false の場合、下記で個別設定をする。
+  #Standard:
+  #  Type: AWS::SecurityHub::Standard
+  #  DependsOn: SecurityHub
+  #  Properties:
+  #    StandardsArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}::standards/aws-foundational-security-best-practices/v/1.#0.0
+  #    DisabledStandardsControls:
+  #      - StandardsControlArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}:${AWS::AccountId}:control/#aws-foundational-security-best-practices/v/1.0.0/IAM.6
+  #        Reason: "No checked"
+  #      - StandardsControlArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}:${AWS::AccountId}:control/#aws-foundational-security-best-practices/v/1.0.0/EC2.8
+  #        Reason: "No checked"
+  #      - StandardsControlArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}:${AWS::AccountId}:control/#aws-foundational-security-best-practices/v/1.0.0/CloudTrail.5
+  #        Reason: "No checked"
+  #      - StandardsControlArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}:${AWS::AccountId}:control/#aws-foundational-security-best-practices/v/1.0.0/Config.1
+  #        Reason: "No checked"
+
+Outputs:
+  GuardDutyArn:
+    Description: GuardDuty ARN
+    Value: !Ref GuardDuty
+
+  SecurityHubArn:
+    Description: SecurityHub ARN
+    Value: !Ref SecurityHub
+  
+  #StandardArn:
+  #  Description: SecurityHub Standard ARN
+  #  Value: !Ref Standard
