@@ -89,8 +89,8 @@ Resources:
             sudo chmod u+x /etc/init.d/cfn-hup
 
             # Run cfn-init and cfn-signal
-            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
-            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
+            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource BastionInstance --region ${AWS::Region}
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource BastionInstance --region ${AWS::Region}
       Tags:
         - Key: Name
           Value: !Sub ${Prefix}-ec2-instance-bastion
