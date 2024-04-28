@@ -85,7 +85,7 @@ Conditions:
   BuildPublicC:        !And [ Condition: BuildPublicSubnets, Condition: BuildPrivateC ]
   BuildNATGateway:      !Equals [ !Ref NATType, "NAT Gateway" ]
   BuildNATInstance:     !Equals [ !Ref NATType, "EC2 NAT Instance" ]
-  BuildNoNAT:           !Equals [ !Ref NATType, "None" ]
+  BuildNAT:           !Not [ !Equals [ !Ref NATType, "None" ] ]
   BuildVPCEndpointS3 :    !Equals [ !Ref PrivateS3Access, True ]
 
 
@@ -231,6 +231,7 @@ Resources:
 
   PrivateRoute1:            # Private route table can access web via NAT (created below)
     Type: AWS::EC2::Route
+    Condition: BuildNAT
     Properties:
       RouteTableId: !Ref PrivateRouteTable
       DestinationCidrBlock: 0.0.0.0/0
