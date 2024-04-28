@@ -85,6 +85,7 @@ Conditions:
   BuildPublicC:        !And [ Condition: BuildPublicSubnets, Condition: BuildPrivateC ]
   BuildNATGateway:      !Equals [ !Ref NATType, "NAT Gateway" ]
   BuildNATInstance:     !Equals [ !Ref NATType, "EC2 NAT Instance" ]
+  BuildNoNAT:           !Equals [ !Ref NATType, "None" ]
   BuildVPCEndpointS3 :    !Equals [ !Ref PrivateS3Access, True ]
 
 
@@ -235,8 +236,10 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       # If we are using a NAT Instance, route traffic through the NAT Instance:
       InstanceId:   !If [ BuildNATInstance, !Ref NATInstance, !Ref "AWS::NoValue" ]
-      # Otherwise if we are using a NAT Gateway, route traffic through the NAT Gateway:
+      # If we are using a NAT Gateway, route traffic through the NAT Gateway:
       NatGatewayId: !If [ BuildNATGateway, !Ref NATGateway, !Ref "AWS::NoValue" ]
+      # Otherwise, route traffic through the Local Gateway:
+      GatewayId: !If [ BuildNoNat, local, !Ref "AWS::NoValue" ]
 
   # Attach the public subnets to public route tables, 
   # and attach the private subnets to private route tables:    
