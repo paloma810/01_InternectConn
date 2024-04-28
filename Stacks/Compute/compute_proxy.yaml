@@ -127,8 +127,8 @@ Resources:
             sudo chmod u+x /etc/init.d/cfn-hup
 
             # Run cfn-init and cfn-signal
-            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
-            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ProxyLunchTemplate --region ${AWS::Region}
+            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLaunchTemplate --region ${AWS::Region}
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ProxyLaunchTemplate --region ${AWS::Region}
         TagSpecifications:
           -
             ResourceType: instance
