@@ -8,28 +8,108 @@ Metadata:
       - Label: 
           default: "Parent Stacks"
         Parameters: 
-          - ParentKMSStackName
-          - ParentIAMStackName
+          - ParentEC2BastionStackName
+          - ParentSNSStackName
       - Label:
           default: "Parameters"
         Parameters:
           - Prefix
+          - CPUUtilizationThreshold
+          - MemoryUsedThreshold
+
 
 Parameters:
   Prefix:
     Type: String
     Default: "kh-paloma-m01"
     Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
-  ParentKMSStackName:
-    Description: Name of an active CloudFormation stack that contains the KMS resources.
+  CPUUtilizationThreshold:
+    Type: Number
+    Default: 60
+    Description:  Threshold for CPU Utilization
+  MemoryUsedThreshold:
+    Type: Number
+    Default: 60
+    Description:  Threshold for Memory Used Percent
+  ParentEC2BastionStackName:
+    Description: Name of an active CloudFormation stack that contains the EC2Bastion resources.
     Type: String
-    Default: "KMS2"
+    Default: "Bastion1"
     ConstraintDescription: Must be the name of an existing CloudFormation stack.
-  ParentIAMStackName:
+  ParentSNSStackName:
     Type: String
-    Default: "IAM1"
-    Description: Name of the stack where IAM is created
+    Default: "SNS1"
+    Description: Name of the stack where SNS is created
     ConstraintDescription: Must be the name of an existing CloudFormation stack.
 
 Resources:
 
+  BastionCPUUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ### 基本設定
+      AlarmName: !Sub "${Prefix}-Bastion-cpu-utilization-alarm"
+      AlarmDescription: !Sub "Bastion Server のCPU使用率が ${CPUUtilizationThreshold} %以上になりました"
+
+      ### メトリクス
+      Namespace: "AWS/EC2"
+      Dimensions:
+        - Name: "InstanceId"
+          Value: {'Fn::ImportValue': !Sub '${ParentEC2BastionStackName}-Instance-Bastion'}
+      MetricName: "CPUUtilization"
+      Unit: "Percent"
+
+      ### 統計
+      Period: 300
+      Statistic: "Average"
+
+      ### 評価
+      Threshold: !Ref CPUUtilizationThreshold
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      TreatMissingData: "missing"
+
+      ### アクション
+      ActionsEnabled: True
+      AlarmActions:
+        - {'Fn::ImportValue': !Sub '${ParentSNSStackName}-SNSTopicCWMetrics'}
+      # OKActions:
+      #   - !Ref OKTopicARN
+      # InsufficientDataActions:
+      #   - !Ref InsufficientDataTopicARN
+
+  BastionMemoryUsedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ### 基本設定
+      AlarmName: !Sub "${Prefix}-Bastion-memory-used-alarm"
+      AlarmDescription: !Sub "Bastion Server のメモリ使用量が ${MemoryUsedThreshold} %以上になりました"
+
+      ### メトリクス
+      Namespace: !Sub '${ParentEC2BastionStackName}'
+      Dimensions:
+        - Name: "InstanceId"
+          Value: {'Fn::ImportValue': !Sub '${ParentEC2BastionStackName}-Instance-Bastion'}
+      MetricName: "mem_used_percent"
+      Unit: "Percent"
+
+      ### 統計
+      Period: 300
+      Statistic: "Average"
+
+      ### 評価
+      Threshold: !Ref MemoryUsedThreshold
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      TreatMissingData: "missing"
+
+      ### アクション
+      ActionsEnabled: True
+      AlarmActions:
+        - {'Fn::ImportValue': !Sub '${ParentSNSStackName}-SNSTopicCWMetrics'}
+      # OKActions:
+      #   - !Ref OKTopicARN
+      # InsufficientDataActions:
+      #   - !Ref InsufficientDataTopicARN
