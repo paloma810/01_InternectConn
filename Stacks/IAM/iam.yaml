@@ -107,6 +107,77 @@ Resources:
       - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores
       Path: "/service-role/"
 
+  #########
+  # CI/CD #
+  #########
+
+  PipelineIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}-role-pipeline"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - codedeploy:*
+                  - codebuild:*
+                  - codecommit:*
+                  - ssm:*
+                  - ec2:*
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-role-pipeline
+
+  BuildProjectIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}-role-buildproject"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                  - ec2:*
+                Resource: '*'
+              - Effect: Allow
+                Action: codebuild:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:CreateLogGroup
+                  - logs:PutLogEvents
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-role-buildproject
+
+
 Outputs:
   EC2IAM:
     Description: IAM for EC2
@@ -138,3 +209,13 @@ Outputs:
     Value: !GetAtt BackupIAMrole.Arn
     Export:
       Name: !Sub ${AWS::StackName}-ROLE-BackupArn
+  PipelineIAMArn:
+    Description: IAM for AWS Code Piepline
+    Value: !GetAtt PipelineIAMRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-ROLE-PipelineArn
+  BuildProjectIAMArn:
+    Description: IAM for AWS Code Build - Project
+    Value: !GetAtt BuildProjectIAMRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-ROLE-BuildProjectArn

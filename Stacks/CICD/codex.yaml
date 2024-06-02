@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template for Code Pipeline/Code Build/Code Deploy'
+
+Metadata: 
+  # Control the UI display when running this template from the AWS Management Console:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Parent Stacks"
+        Parameters: 
+          - ParentIAMStackName
+      - Label:
+          default: "Parameters"
+        Parameters:
+          - Prefix
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: "kh-paloma-m01"
+    Description:  The prefix to use for the resource name.  This is used to create unique resource names. 
+  ParentIAMStackName:
+    Type: String
+    Default: "IAM1"
+    Description: Name of the stack where IAM is created
+    ConstraintDescription: Must be the name of an existing CloudFormation stack.
+
+Resources:
+
+  ################
+  # CodePipeline #
+  ################
+
+  AMIGenPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${Prefix}-pipeline-amigen"
+      ArtifactStore:
+        Type: S3
+        Location:
+          !Ref BuildOutputBucket
+      RoleArn: {'Fn::ImportValue': !Sub '${ParentIAMStackName}-ROLE-PipelineArn'}
+      RestartExecutionOnUpdate: false
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              Configuration:
+                S3Bucket: !Ref BuildSourceBucket
+                S3ObjectKey: build_artifact.zip
+              OutputArtifacts:
+                - Name: AMIGenSourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref AMIGenBuildProject
+              InputArtifacts:
+                - Name: AMIGenSourceOutput
+              OutputArtifacts:
+                - Name: AMIGenBuildOutput
+        - Name: Deploy
+          Actions:
+            - Name: DeployAction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              Configuration:
+                BucketName: !Ref BuildOutputBucket
+                Extract: true
+                ObjectKey: !Sub "${BuildOutputBucket}/build_artifact.zip"
+              RunOrder: 1
+                #S3Location:
+                #  Bucket: !Ref BuildOutputBucket
+                #  BundleType: zip
+                #  Key: !Sub "${BuildOutput}/build_artifact.zip"
+              InputArtifacts:
+                - Name: AMIGenBuildOutput
+
+  AMIGenBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${Prefix}-build-project-amigen"
+      ServiceRole: {'Fn::ImportValue': !Sub '${ParentIAMStackName}-ROLE-BuildProjectArn'}
+      Artifacts:
+        Type: CODEPIPELINE
+        EncryptionDisabled: true
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: SAMPLEENVVAR
+            Type: PLAINTEXT
+            Value: test
+        Image: aws/codebuild/standard:5.0
+        Type: LINUX_CONTAINER
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: build_artifact/buildspec.yml
+        #BuildSpec: |
+        #  version: 0.2
+        #  phases:
+        #    build:
+        #      commands:
+        #        - pwd
+        #        - ls -la
+        #        - echo Build started on `date`
+        #        - echo Building the application...
+        #        - packer build packer_template.json
+        #        - echo Build completed on `date`
+        #  artifacts:
+        #    files:
+        #      - path/to/ami_image_id.txt
+
+  # コスト節約のためCMEKは利用しない。
+  BuildSourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Prefix}-s3-bucket-buildsource"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  BuildSourceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BuildSourceBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${BuildSourceBucket}/"
+        
+  # コスト節約のためCMEKは利用しない。
+  BuildOutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Prefix}-s3-bucket-buildoutput"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  BuildOutputBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BuildOutputBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: '*'
+            Action: '*'
+            Resource: '*'
+
+
+
